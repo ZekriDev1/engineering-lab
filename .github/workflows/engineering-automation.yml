@@ -1,0 +1,103 @@
+
+name: Engineering Activity Automation
+
+on:
+  schedule:
+    # Every day except Sunday, at 22:00 Morocco time
+    - cron: "0 22 * * 1-6"
+      timezone: "Africa/Casablanca"
+
+  workflow_dispatch:
+    inputs:
+      progress:
+        description: "Describe genuine engineering work completed"
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: engineering-activity
+  cancel-in-progress: false
+
+jobs:
+  activity:
+    name: Engineering Progress
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. Get repository files
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # 2. Block Sunday under all circumstances
+      - name: Sunday protection
+        shell: bash
+        run: |
+          DAY=$(TZ=Africa/Casablanca date +%u)
+
+          if [ "$DAY" = "7" ]; then
+            echo "::error::Sunday is blocked. No commits allowed."
+            exit 1
+          fi
+
+          echo "Day permitted."
+
+      # 3. Check whether genuine progress was supplied
+      - name: Validate progress
+        id: validate
+        shell: bash
+        env:
+          PROGRESS: ${{ inputs.progress }}
+        run: |
+          if [ -z "${PROGRESS//[[:space:]]/}" ]; then
+            echo "has_progress=false" >> "$GITHUB_OUTPUT"
+            echo "No progress supplied. Skipping commit."
+          else
+            echo "has_progress=true" >> "$GITHUB_OUTPUT"
+            echo "Progress supplied."
+          fi
+
+      # 4. Configure Git identity
+      - name: Configure Git
+        if: steps.validate.outputs.has_progress == 'true'
+        run: |
+          git config user.name "Akram Zekri"
+          git config user.email "${{ secrets.COMMIT_EMAIL }}"
+
+      # 5. Create a genuine engineering journal entry
+      - name: Record engineering progress
+        if: steps.validate.outputs.has_progress == 'true'
+        shell: bash
+        env:
+          PROGRESS: ${{ inputs.progress }}
+        run: |
+          DATE=$(TZ=Africa/Casablanca date +%F)
+
+          mkdir -p engineering-log
+
+          FILE="engineering-log/${DATE}.md"
+
+          if [ ! -f "$FILE" ]; then
+            echo "# Engineering Progress - ${DATE}" > "$FILE"
+            echo "" >> "$FILE"
+          fi
+
+          printf '%s\n\n' "## Work completed" >> "$FILE"
+          printf '%s\n' "$PROGRESS" >> "$FILE"
+
+          git add "$FILE"
+
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+            exit 0
+          fi
+
+          git commit -m "docs: record engineering progress (${DATE})"
+
+      # 6. Push changes to GitHub
+      - name: Push to GitHub
+        if: steps.validate.outputs.has_progress == 'true'
+        run: |
+          git push origin HEAD
