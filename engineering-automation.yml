@@ -1,1 +1,90 @@
 
+name: Engineering Activity
+
+on:
+  schedule:
+    - cron: "0 22 * * 1-6"
+      timezone: "Africa/Casablanca"
+
+  workflow_dispatch:
+    inputs:
+      progress:
+        description: "Describe the actual engineering work completed"
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: engineering-activity
+  cancel-in-progress: false
+
+jobs:
+  activity:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Sunday protection
+        run: |
+          DAY=$(TZ=Africa/Casablanca date +%u)
+
+          if [ "$DAY" = "7" ]; then
+            echo "Sunday is blocked."
+            exit 1
+          fi
+
+      - name: Check progress entry
+        id: progress
+        env:
+          PROGRESS: ${{ inputs.progress }}
+        run: |
+          if [ -z "${PROGRESS// /}" ]; then
+            echo "has_progress=false" >> "$GITHUB_OUTPUT"
+            echo "No progress supplied. No commit will be created."
+          else
+            echo "has_progress=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Configure Git
+        if: steps.progress.outputs.has_progress == 'true'
+        run: |
+          git config user.name "Akram Zekri"
+          git config user.email "${{ secrets.COMMIT_EMAIL }}"
+
+      - name: Record engineering progress
+        if: steps.progress.outputs.has_progress == 'true'
+        env:
+          PROGRESS: ${{ inputs.progress }}
+        run: |
+          mkdir -p engineering-log
+
+          DATE=$(TZ=Africa/Casablanca date +%F)
+
+          FILE="engineering-log/$DATE.md"
+
+          if [ -f "$FILE" ]; then
+            echo "" >> "$FILE"
+          else
+            echo "# Engineering Progress - $DATE" > "$FILE"
+            echo "" >> "$FILE"
+          fi
+
+          echo "## Work completed" >> "$FILE"
+          echo "$PROGRESS" >> "$FILE"
+
+          git add "$FILE"
+
+          if git diff --cached --quiet; then
+            echo "No new changes."
+            exit 0
+          fi
+
+          git commit -m "docs: record engineering progress ($DATE)"
+
+      - name: Push
+        if: steps.progress.outputs.has_progress == 'true'
+        run: git push
